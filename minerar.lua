@@ -29,26 +29,20 @@ local dropsMinerio = {
 print("=== MINERADORA INTELIGENTE ===")
 print("Fuel atual: " .. turtle.getFuelLevel())
 print("")
-print("Quais minerios voce quer procurar?")
+print("Quais minerios voce quer procurar? (recomendado: 1 ou 2 por vez)")
 print("1 - Diamante")
 print("2 - Ouro")
 print("3 - Redstone")
 print("4 - Lapis Lazuli")
 print("5 - Carvao")
-print("Digite os numeros separados por virgula (ex: 1,2,4) ou 'todos':")
+print("Digite os numeros separados por virgula (ex: 1,2):")
 local escolha = read()
 
 local idsProcurados = {}
-if escolha == "todos" then
-    for _, item in pairs(mapaMinerios) do
-        for _, id in ipairs(item.ids) do table.insert(idsProcurados, id) end
-    end
-else
-    for numero in escolha:gmatch("%d") do
-        if mapaMinerios[numero] then
-            for _, id in ipairs(mapaMinerios[numero].ids) do
-                table.insert(idsProcurados, id)
-            end
+for numero in escolha:gmatch("%d") do
+    if mapaMinerios[numero] then
+        for _, id in ipairs(mapaMinerios[numero].ids) do
+            table.insert(idsProcurados, id)
         end
     end
 end
@@ -58,8 +52,12 @@ if #idsProcurados == 0 then
     return
 end
 
+print("Quantos blocos deseja descer antes de comecar a escanear?")
+print("(digite 0 se ja estiver na profundidade certa)")
+local profundidadeDescer = tonumber(read()) or 0
+
 if turtle.getFuelLevel() < 200 then
-    print("AVISO: fuel inicial baixo (" .. turtle.getFuelLevel() .. "). Recomendado ter pelo menos 500+ antes de comecar.")
+    print("AVISO: fuel inicial baixo (" .. turtle.getFuelLevel() .. "). Recomendado ter pelo menos 500+.")
     print("Deseja continuar mesmo assim? (s/n)")
     local resp = read()
     if resp ~= "s" and resp ~= "S" then
@@ -68,7 +66,7 @@ if turtle.getFuelLevel() < 200 then
     end
 end
 
--- ===== POSICAO E DIRECAO =====
+-- ===== POSICAO E DIRECAO (0,0,0 = onde ela comecou, na superficie) =====
 local posX, posY, posZ, direcao = 0, 0, 0, 0
 
 -- ===== PERIFERICO =====
@@ -97,11 +95,8 @@ local function ehItemParaGuardar(nome)
     return false
 end
 
--- reabastece SO o minimo necessario, item por item, pra nao gastar
--- o carvao coletado de uma vez -- so age em emergencia real
 local function verificarFuel()
     if turtle.getFuelLevel() >= FUEL_MINIMO_EMERGENCIA then return end
-
     for slot = 1, 16 do
         turtle.select(slot)
         local item = turtle.getItemDetail()
@@ -127,7 +122,7 @@ local function descartarLixo()
     turtle.select(1)
 end
 
--- ===== MOVIMENTO COM GIRO OTIMIZADO =====
+-- ===== MOVIMENTO =====
 
 local function virarDireita()
     turtle.turnRight()
@@ -139,19 +134,12 @@ local function virarEsquerda()
     direcao = (direcao - 1) % 4
 end
 
--- escolhe o caminho mais curto (direita, esquerda ou meia-volta)
--- em vez de sempre girar so pra um lado
 local function orientarPara(dirAlvo)
     local diferenca = (dirAlvo - direcao) % 4
-    if diferenca == 0 then
-        return
-    elseif diferenca == 1 then
-        virarDireita()
-    elseif diferenca == 2 then
-        virarDireita()
-        virarDireita()
-    elseif diferenca == 3 then
-        virarEsquerda()
+    if diferenca == 0 then return
+    elseif diferenca == 1 then virarDireita()
+    elseif diferenca == 2 then virarDireita() virarDireita()
+    elseif diferenca == 3 then virarEsquerda()
     end
 end
 
@@ -170,7 +158,6 @@ local function avancar()
         tentativas = tentativas + 1
     end
     if tentativas >= 20 then return false end
-
     if direcao == 0 then posZ = posZ + 1
     elseif direcao == 1 then posX = posX + 1
     elseif direcao == 2 then posZ = posZ - 1
@@ -216,47 +203,33 @@ local function descer()
     return true
 end
 
--- movimenta primeiro no eixo Y (evita cavar lateral por engano),
--- depois Z, depois X, sempre orientando pelo caminho mais curto
 local function irPara(destX, destY, destZ)
-    while posY < destY do
-        if not subir() then return false end
-    end
-    while posY > destY do
-        if not descer() then return false end
-    end
+    while posY < destY do if not subir() then return false end end
+    while posY > destY do if not descer() then return false end end
 
     if posZ < destZ then
         orientarPara(0)
-        for i = 1, destZ - posZ do
-            if not avancar() then return false end
-        end
+        for i = 1, destZ - posZ do if not avancar() then return false end end
     elseif posZ > destZ then
         orientarPara(2)
-        for i = 1, posZ - destZ do
-            if not avancar() then return false end
-        end
+        for i = 1, posZ - destZ do if not avancar() then return false end end
     end
 
     if posX < destX then
         orientarPara(1)
-        for i = 1, destX - posX do
-            if not avancar() then return false end
-        end
+        for i = 1, destX - posX do if not avancar() then return false end end
     elseif posX > destX then
         orientarPara(3)
-        for i = 1, posX - destX do
-            if not avancar() then return false end
-        end
+        for i = 1, posX - destX do if not avancar() then return false end end
     end
 
     return true
 end
 
--- ===== RETORNO A ORIGEM =====
+-- ===== RETORNO A ORIGEM (superficie) =====
 
 local function voltarParaOrigem()
-    print("Voltando para a origem... posicao atual: X=" .. posX .. " Y=" .. posY .. " Z=" .. posZ)
+    print("Voltando para a superficie... posicao atual: X=" .. posX .. " Y=" .. posY .. " Z=" .. posZ)
     local sucesso = irPara(0, 0, 0)
     if not sucesso then
         print("AVISO: obstaculo impediu retorno total. Tentando novamente...")
@@ -265,7 +238,7 @@ local function voltarParaOrigem()
     end
     orientarPara(0)
     if posX == 0 and posY == 0 and posZ == 0 then
-        print("Chegou na origem com sucesso!")
+        print("Chegou na superficie com sucesso!")
     else
         print("ATENCAO: retorno incompleto. Posicao final: X=" .. posX .. " Y=" .. posY .. " Z=" .. posZ)
     end
@@ -324,14 +297,10 @@ local function escanearEAdicionar()
     return novos
 end
 
--- sempre pega o alvo mais proximo da posicao ATUAL (nao da origem),
--- isso minimiza deslocamento total
 local function pegarAlvoMaisProximo()
     if #listaAlvos == 0 then return nil end
-
     local indiceMaisProximo = nil
     local menorDistancia = math.huge
-
     for i, alvo in ipairs(listaAlvos) do
         local dist = math.abs(alvo.x - posX) + math.abs(alvo.y - posY) + math.abs(alvo.z - posZ)
         if dist < menorDistancia then
@@ -339,8 +308,20 @@ local function pegarAlvoMaisProximo()
             indiceMaisProximo = i
         end
     end
-
     return table.remove(listaAlvos, indiceMaisProximo)
+end
+
+-- ===== DESCIDA INICIAL =====
+
+if profundidadeDescer > 0 then
+    print("Descendo " .. profundidadeDescer .. " blocos antes de comecar...")
+    for i = 1, profundidadeDescer do
+        if not descer() then
+            print("Bloqueada durante a descida! Parando na profundidade atual (Y=" .. posY .. ")")
+            break
+        end
+    end
+    print("Chegou na profundidade Y=" .. posY .. ". Iniciando escaneamento...")
 end
 
 -- ===== LOOP PRINCIPAL =====
@@ -380,9 +361,9 @@ while semAcharNada < 3 do
     end
 end
 
-print("Busca finalizada. Retornando para a origem...")
+print("Busca finalizada. Retornando para a superficie...")
 voltarParaOrigem()
 descarregarNaOrigem()
 
-print("Turtle de volta na origem! Missao concluida.")
+print("Turtle de volta na superficie! Missao concluida.")
 print("Fuel restante: " .. turtle.getFuelLevel())
