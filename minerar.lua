@@ -1,18 +1,12 @@
 -- ===== CONFIGURACOES =====
-local LARGURA = 15
-local COMPRIMENTO = 15
-local profundidade = 0
+local RAIO_SCAN = 8
 
-local itensParaGuardar = {
-    "minecraft:redstone",
-    "minecraft:lapis_lazuli",
-    "minecraft:raw_gold",
-    "minecraft:gold_ore",
-    "minecraft:deepslate_gold_ore",
-    "minecraft:diamond",
-    "minecraft:coal",
-    "minecraft:coal_ore",
-    "minecraft:deepslate_coal_ore",
+local mapaMinerios = {
+    ["1"] = {nome = "Diamante", ids = {"minecraft:diamond_ore", "minecraft:deepslate_diamond_ore"}},
+    ["2"] = {nome = "Ouro", ids = {"minecraft:gold_ore", "minecraft:deepslate_gold_ore"}},
+    ["3"] = {nome = "Redstone", ids = {"minecraft:redstone_ore", "minecraft:deepslate_redstone_ore"}},
+    ["4"] = {nome = "Lapis Lazuli", ids = {"minecraft:lapis_ore", "minecraft:deepslate_lapis_ore"}},
+    ["5"] = {nome = "Carvao", ids = {"minecraft:coal_ore", "minecraft:deepslate_coal_ore"}},
 }
 
 local itensCombustivel = {
@@ -21,11 +15,46 @@ local itensCombustivel = {
     "minecraft:deepslate_coal_ore",
 }
 
--- posicao relativa ao ponto de partida (0,0,0) e direcao (0=frente original,1=direita,2=tras,3=esquerda)
+-- ===== MENU DE ESCOLHA =====
+
+print("Quais minerios voce quer procurar?")
+print("1 - Diamante")
+print("2 - Ouro")
+print("3 - Redstone")
+print("4 - Lapis Lazuli")
+print("5 - Carvao")
+print("Digite os numeros separados por virgula (ex: 1,2,4) ou 'todos':")
+local escolha = read()
+
+local idsProcurados = {}
+if escolha == "todos" then
+    for _, item in pairs(mapaMinerios) do
+        for _, id in ipairs(item.ids) do table.insert(idsProcurados, id) end
+    end
+else
+    for numero in escolha:gmatch("%d") do
+        if mapaMinerios[numero] then
+            for _, id in ipairs(mapaMinerios[numero].ids) do
+                table.insert(idsProcurados, id)
+            end
+        end
+    end
+end
+
+if #idsProcurados == 0 then
+    print("Nenhum minerio valido selecionado. Encerrando.")
+    return
+end
+
+-- ===== POSICAO E DIRECAO =====
 local posX, posY, posZ, direcao = 0, 0, 0, 0
 
-print("Quantas camadas de profundidade escavar? (cada camada = 2 blocos de altura)")
-profundidade = tonumber(read())
+-- ===== PERIFERICO =====
+local geoScanner = peripheral.wrap("right")
+if not geoScanner then
+    print("ERRO: Geo Scanner nao encontrado no lado direito.")
+    return
+end
 
 -- ===== FUNCOES BASICAS =====
 
@@ -36,16 +65,13 @@ local function ehCombustivel(nome)
     return false
 end
 
-local function verificarFuel(minimo)
-    if turtle.getFuelLevel() < minimo then
+local function verificarFuel()
+    if turtle.getFuelLevel() < 200 then
         for slot = 1, 16 do
             turtle.select(slot)
             if turtle.refuel(0) then turtle.refuel() end
         end
         turtle.select(1)
-        if turtle.getFuelLevel() < minimo then
-            print("AVISO: fuel baixo (" .. turtle.getFuelLevel() .. ")")
-        end
     end
 end
 
@@ -54,9 +80,13 @@ local function descartarLixo()
         turtle.select(slot)
         local item = turtle.getItemDetail()
         if item then
-            local guardar = false
-            for _, nome in ipairs(itensParaGuardar) do
-                if item.name == nome then guardar = true break end
+            local guardar = ehCombustivel(item.name)
+            for _, id in ipairs(idsProcurados) do
+                if item.name == id then guardar = true end
+            end
+            local drops = {"minecraft:redstone","minecraft:diamond","minecraft:lapis_lazuli","minecraft:raw_gold"}
+            for _, d in ipairs(drops) do
+                if item.name == d then guardar = true end
             end
             if not guardar then turtle.drop() end
         end
@@ -64,14 +94,10 @@ local function descartarLixo()
     turtle.select(1)
 end
 
-local function inventarioCheio()
-    for slot = 1, 16 do
-        if turtle.getItemCount(slot) == 0 then return false end
-    end
-    return true
-end
-
 -- ===== MOVIMENTO COM RASTREAMENTO DE POSICAO =====
+-- IMPORTANTE: essas funcoes so atualizam posX/posY/posZ/direcao QUANDO
+-- o movimento realmente da certo. Isso garante que a posicao salva
+-- sempre reflita a posicao real da turtle, essencial pro retorno funcionar.
 
 local function virarDireita()
     turtle.turnRight()
@@ -84,64 +110,132 @@ local function virarEsquerda()
 end
 
 local function orientarPara(dirAlvo)
-    while direcao ~= dirAlvo do virarDireita() end
+    local tentativas = 0
+    while direcao ~= dirAlvo and tentativas < 4 do
+        virarDireita()
+        tentativas = tentativas + 1
+    end
 end
 
 local function avancar()
-    while turtle.detect() do turtle.dig() sleep(0.3) end
-    while not turtle.forward() do
+    verificarFuel()
+    local tentativas = 0
+    while turtle.detect() and tentativas < 20 do
+        turtle.dig()
+        sleep(0.3)
+        tentativas = tentativas + 1
+    end
+    tentativas = 0
+    while not turtle.forward() and tentativas < 20 do
         if turtle.detect() then turtle.dig() end
         sleep(0.3)
+        tentativas = tentativas + 1
+    end
+    if tentativas >= 20 then
+        return false -- nao conseguiu avancar, evita loop infinito
     end
     if direcao == 0 then posZ = posZ + 1
     elseif direcao == 1 then posX = posX + 1
     elseif direcao == 2 then posZ = posZ - 1
     elseif direcao == 3 then posX = posX - 1
     end
-    if turtle.detectUp() then turtle.digUp() end
     descartarLixo()
+    return true
 end
 
 local function subir()
-    while turtle.detectUp() do turtle.digUp() end
-    while not turtle.up() do sleep(0.3) end
+    verificarFuel()
+    local tentativas = 0
+    while turtle.detectUp() and tentativas < 20 do
+        turtle.digUp()
+        sleep(0.3)
+        tentativas = tentativas + 1
+    end
+    tentativas = 0
+    while not turtle.up() and tentativas < 20 do
+        sleep(0.3)
+        tentativas = tentativas + 1
+    end
+    if tentativas >= 20 then return false end
     posY = posY + 1
+    return true
 end
 
 local function descer()
-    while turtle.detectDown() do turtle.digDown() end
-    while not turtle.down() do sleep(0.3) end
+    verificarFuel()
+    local tentativas = 0
+    while turtle.detectDown() and tentativas < 20 do
+        turtle.digDown()
+        sleep(0.3)
+        tentativas = tentativas + 1
+    end
+    tentativas = 0
+    while not turtle.down() and tentativas < 20 do
+        sleep(0.3)
+        tentativas = tentativas + 1
+    end
+    if tentativas >= 20 then return false end
     posY = posY - 1
+    return true
 end
 
--- vai da posicao atual ate as coordenadas (destX, destY, destZ)
+-- vai da posicao atual ate as coordenadas absolutas (relativas a origem 0,0,0)
+-- retorna true se conseguiu chegar, false se travou em algum ponto
 local function irPara(destX, destY, destZ)
-    while posY < destY do subir() end
-    while posY > destY do descer() end
+    while posY < destY do
+        if not subir() then return false end
+    end
+    while posY > destY do
+        if not descer() then return false end
+    end
 
     if posZ < destZ then
         orientarPara(0)
-        for i = 1, destZ - posZ do avancar() end
+        for i = 1, destZ - posZ do
+            if not avancar() then return false end
+        end
     elseif posZ > destZ then
         orientarPara(2)
-        for i = 1, posZ - destZ do avancar() end
+        for i = 1, posZ - destZ do
+            if not avancar() then return false end
+        end
     end
 
     if posX < destX then
         orientarPara(1)
-        for i = 1, destX - posX do avancar() end
+        for i = 1, destX - posX do
+            if not avancar() then return false end
+        end
     elseif posX > destX then
         orientarPara(3)
-        for i = 1, posX - destX do avancar() end
+        for i = 1, posX - destX do
+            if not avancar() then return false end
+        end
     end
+
+    return true
 end
 
--- ===== DESCARREGAR NO BAU DE ORIGEM =====
+-- ===== RETORNO A ORIGEM (funcao critica, chamada varias vezes) =====
 
-local function irDescarregarERetornar()
-    local sx, sy, sz, sdir = posX, posY, posZ, direcao
-    irPara(0, 0, 0)
+local function voltarParaOrigem()
+    print("Voltando para a origem... posicao atual: X=" .. posX .. " Y=" .. posY .. " Z=" .. posZ)
+    local sucesso = irPara(0, 0, 0)
+    if not sucesso then
+        print("AVISO: obstaculo impediu retorno total. Tentando novamente...")
+        sleep(1)
+        sucesso = irPara(0, 0, 0)
+    end
     orientarPara(0)
+    if posX == 0 and posY == 0 and posZ == 0 then
+        print("Chegou na origem com sucesso!")
+    else
+        print("ATENCAO: nao foi possivel confirmar retorno exato. Posicao: X=" .. posX .. " Y=" .. posY .. " Z=" .. posZ)
+    end
+    return sucesso
+end
+
+local function descarregarNaOrigem()
     for slot = 1, 16 do
         turtle.select(slot)
         local item = turtle.getItemDetail()
@@ -150,57 +244,65 @@ local function irDescarregarERetornar()
         end
     end
     turtle.select(1)
-    irPara(sx, sy, sz)
-    orientarPara(sdir)
 end
 
--- ===== ESCAVACAO DE UMA CAMADA (15x15, em zigue-zague) =====
+-- ===== ESCANEAMENTO =====
 
-local function escavarCamada()
-    local indoDireita = true
-    for linha = 1, COMPRIMENTO do
-        for coluna = 1, LARGURA - 1 do
-            avancar()
-            verificarFuel(300)
-            if inventarioCheio() then
-                print("Inventario cheio, indo descarregar...")
-                irDescarregarERetornar()
-                print("Retomando escavacao...")
+local function encontrarMinerioMaisProximo()
+    local ok, resultado = pcall(function() return geoScanner.scan(RAIO_SCAN) end)
+    if not ok or not resultado then return nil end
+
+    local maisProximo = nil
+    local menorDistancia = math.huge
+
+    for _, bloco in ipairs(resultado) do
+        for _, id in ipairs(idsProcurados) do
+            if bloco.name == id then
+                local dist = math.abs(bloco.x) + math.abs(bloco.y) + math.abs(bloco.z)
+                if dist < menorDistancia then
+                    menorDistancia = dist
+                    maisProximo = bloco
+                end
             end
-        end
-        if linha < COMPRIMENTO then
-            if indoDireita then
-                virarDireita(); avancar(); virarDireita()
-            else
-                virarEsquerda(); avancar(); virarEsquerda()
-            end
-            indoDireita = not indoDireita
         end
     end
+
+    return maisProximo
 end
 
 -- ===== LOOP PRINCIPAL =====
 
-print("Iniciando escavacao da chunk (15x15), " .. profundidade .. " camadas de profundidade...")
+print("Iniciando busca por minerios...")
 print("Fuel atual: " .. turtle.getFuelLevel())
 
-for camada = 1, profundidade do
-    print("Camada " .. camada .. " de " .. profundidade)
-    escavarCamada()
-    if camada < profundidade then
-        descer()
-        descer()
+local semAchar = 0
+local rodando = true
+
+while rodando and semAchar < 3 do
+    -- checagem de seguranca: se fuel ficar muito baixo, aborta e volta
+    if turtle.getFuelLevel() < 50 then
+        print("Fuel critico! Abortando busca e voltando...")
+        break
+    end
+
+    local alvo = encontrarMinerioMaisProximo()
+
+    if alvo then
+        semAchar = 0
+        print("Minerio encontrado! Indo ate ele...")
+        local chegou = irPara(posX + alvo.x, posY + alvo.y, posZ + alvo.z)
+        if not chegou then
+            print("Nao conseguiu chegar no minerio, tentando outro...")
+        end
+    else
+        semAchar = semAchar + 1
+        print("Nada por perto, tentando de novo... (" .. semAchar .. "/3)")
+        sleep(1)
     end
 end
 
-print("Escavacao concluida! Retornando a origem...")
-irPara(0, 0, 0)
-orientarPara(0)
+print("Busca finalizada. Retornando para a origem...")
+voltarParaOrigem()
+descarregarNaOrigem()
 
-for slot = 1, 16 do
-    turtle.select(slot)
-    turtle.drop()
-end
-turtle.select(1)
-
-print("Turtle de volta! Escavacao da chunk finalizada.")
+print("Turtle de volta na origem! Missao concluida.")
