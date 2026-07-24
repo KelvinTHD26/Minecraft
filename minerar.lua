@@ -95,9 +95,6 @@ local function descartarLixo()
 end
 
 -- ===== MOVIMENTO COM RASTREAMENTO DE POSICAO =====
--- IMPORTANTE: essas funcoes so atualizam posX/posY/posZ/direcao QUANDO
--- o movimento realmente da certo. Isso garante que a posicao salva
--- sempre reflita a posicao real da turtle, essencial pro retorno funcionar.
 
 local function virarDireita()
     turtle.turnRight()
@@ -132,7 +129,7 @@ local function avancar()
         tentativas = tentativas + 1
     end
     if tentativas >= 20 then
-        return false -- nao conseguiu avancar, evita loop infinito
+        return false
     end
     if direcao == 0 then posZ = posZ + 1
     elseif direcao == 1 then posX = posX + 1
@@ -179,8 +176,6 @@ local function descer()
     return true
 end
 
--- vai da posicao atual ate as coordenadas absolutas (relativas a origem 0,0,0)
--- retorna true se conseguiu chegar, false se travou em algum ponto
 local function irPara(destX, destY, destZ)
     while posY < destY do
         if not subir() then return false end
@@ -216,7 +211,7 @@ local function irPara(destX, destY, destZ)
     return true
 end
 
--- ===== RETORNO A ORIGEM (funcao critica, chamada varias vezes) =====
+-- ===== RETORNO A ORIGEM =====
 
 local function voltarParaOrigem()
     print("Voltando para a origem... posicao atual: X=" .. posX .. " Y=" .. posY .. " Z=" .. posZ)
@@ -246,28 +241,67 @@ local function descarregarNaOrigem()
     turtle.select(1)
 end
 
--- ===== ESCANEAMENTO =====
+-- ===== ESCANEAMENTO E LISTA DE ALVOS =====
 
-local function encontrarMinerioMaisProximo()
+-- guarda a lista de minerios encontrados (coordenadas absolutas, relativas a origem)
+local listaAlvos = {}
+
+-- marca posicoes ja visitadas pra nao tentar ir duas vezes no mesmo bloco
+local visitados = {}
+local function chaveDe(x, y, z)
+    return x .. "," .. y .. "," .. z
+end
+
+local function escanearEAdicionar()
     local ok, resultado = pcall(function() return geoScanner.scan(RAIO_SCAN) end)
-    if not ok or not resultado then return nil end
+    if not ok or not resultado then return 0 end
 
-    local maisProximo = nil
-    local menorDistancia = math.huge
-
+    local novos = 0
     for _, bloco in ipairs(resultado) do
         for _, id in ipairs(idsProcurados) do
             if bloco.name == id then
-                local dist = math.abs(bloco.x) + math.abs(bloco.y) + math.abs(bloco.z)
-                if dist < menorDistancia then
-                    menorDistancia = dist
-                    maisProximo = bloco
+                -- converte para coordenada absoluta (relativa a origem)
+                local ax = posX + bloco.x
+                local ay = posY + bloco.y
+                local az = posZ + bloco.z
+                local chave = chaveDe(ax, ay, az)
+                if not visitados[chave] then
+                    -- evita duplicar se ja estiver na lista
+                    local jaNaLista = false
+                    for _, alvo in ipairs(listaAlvos) do
+                        if alvo.x == ax and alvo.y == ay and alvo.z == az then
+                            jaNaLista = true
+                            break
+                        end
+                    end
+                    if not jaNaLista then
+                        table.insert(listaAlvos, {x = ax, y = ay, z = az})
+                        novos = novos + 1
+                    end
                 end
             end
         end
     end
+    return novos
+end
 
-    return maisProximo
+-- pega e remove da lista o alvo mais proximo da posicao atual
+local function pegarAlvoMaisProximo()
+    if #listaAlvos == 0 then return nil end
+
+    local indiceMaisProximo = nil
+    local menorDistancia = math.huge
+
+    for i, alvo in ipairs(listaAlvos) do
+        local dist = math.abs(alvo.x - posX) + math.abs(alvo.y - posY) + math.abs(alvo.z - posZ)
+        if dist < menorDistancia then
+            menorDistancia = dist
+            indiceMaisProximo = i
+        end
+    end
+
+    local alvo = table.remove(listaAlvos, indiceMaisProximo)
+    return alvo
 end
 
 -- ===== LOOP PRINCIPAL =====
@@ -275,29 +309,38 @@ end
 print("Iniciando busca por minerios...")
 print("Fuel atual: " .. turtle.getFuelLevel())
 
-local semAchar = 0
-local rodando = true
+local semAcharNada = 0
 
-while rodando and semAchar < 3 do
-    -- checagem de seguranca: se fuel ficar muito baixo, aborta e volta
+while semAcharNada < 3 do
     if turtle.getFuelLevel() < 50 then
         print("Fuel critico! Abortando busca e voltando...")
         break
     end
 
-    local alvo = encontrarMinerioMaisProximo()
-
-    if alvo then
-        semAchar = 0
-        print("Minerio encontrado! Indo ate ele...")
-        local chegou = irPara(posX + alvo.x, posY + alvo.y, posZ + alvo.z)
-        if not chegou then
-            print("Nao conseguiu chegar no minerio, tentando outro...")
+    -- se a lista de alvos pendentes esvaziou, escaneia de novo
+    if #listaAlvos == 0 then
+        print("Escaneando area...")
+        local novos = escanearEAdicionar()
+        if novos == 0 then
+            semAcharNada = semAcharNada + 1
+            print("Nada novo encontrado. (" .. semAcharNada .. "/3)")
+            sleep(1)
+        else
+            print(novos .. " minerio(s) novo(s) encontrado(s)! Total na fila: " .. #listaAlvos)
+            semAcharNada = 0
         end
     else
-        semAchar = semAchar + 1
-        print("Nada por perto, tentando de novo... (" .. semAchar .. "/3)")
-        sleep(1)
+        local alvo = pegarAlvoMaisProximo()
+        local chave = chaveDe(alvo.x, alvo.y, alvo.z)
+        print("Indo ate minerio em X=" .. alvo.x .. " Y=" .. alvo.y .. " Z=" .. alvo.z .. " (restam " .. #listaAlvos .. " na fila)")
+        local chegou = irPara(alvo.x, alvo.y, alvo.z)
+        visitados[chave] = true
+        if not chegou then
+            print("Nao conseguiu chegar nesse minerio, pulando para o proximo...")
+        else
+            -- chegando perto de um alvo, escaneia de novo pra pegar minerios que apareceram no caminho
+            escanearEAdicionar()
+        end
     end
 end
 
