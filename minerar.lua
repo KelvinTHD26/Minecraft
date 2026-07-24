@@ -3,10 +3,11 @@
 -- ========================================
 
 -- ===== CONFIGURACOES =====
-local RAIO_SCAN = 8
-local DISTANCIA_MAXIMA_ORIGEM = 25 -- nao persegue minerio alem disso (evita viagens longas ineficientes)
+local RAIO_SCAN = 16
+local COOLDOWN_SCAN = 2.5 -- segundos (config do servidor: cooldown = 2000ms, com folga)
+local DISTANCIA_MAXIMA_ORIGEM = 30
 local FUEL_MINIMO_EMERGENCIA = 150
-local FUEL_RESERVA_RETORNO = 100 -- fuel minimo que sempre reserva pra garantir volta
+local FUEL_RESERVA_RETORNO = 100
 
 local mapaMinerios = {
     ["1"] = {nome = "Diamante", ids = {"minecraft:diamond_ore", "minecraft:deepslate_diamond_ore"}},
@@ -34,6 +35,7 @@ local posX, posY, posZ, direcao = 0, 0, 0, 0
 local idsProcurados = {}
 local listaAlvos = {}
 local visitados = {}
+local ultimoScan = 0
 
 -- ===== MENU =====
 
@@ -96,7 +98,6 @@ local function ehItemParaGuardar(nome)
     return false
 end
 
--- reabastece devagar, so o minimo necessario, preservando o resto do carvao coletado
 local function verificarFuel()
     if turtle.getFuelLevel() >= FUEL_MINIMO_EMERGENCIA then return end
     for slot = 1, 16 do
@@ -135,7 +136,6 @@ local function virarEsquerda()
     direcao = (direcao - 1) % 4
 end
 
--- gira pelo caminho mais curto (nunca mais de 2 giros)
 local function orientarPara(dirAlvo)
     local diferenca = (dirAlvo - direcao) % 4
     if diferenca == 1 then virarDireita()
@@ -187,7 +187,6 @@ local function descer()
     return true
 end
 
--- move ate as coordenadas (Y primeiro, depois Z, depois X)
 local function irPara(destX, destY, destZ)
     while posY < destY do if not subir() then return false end end
     while posY > destY do if not descer() then return false end end
@@ -209,7 +208,7 @@ local function irPara(destX, destY, destZ)
     return true
 end
 
--- ===== RETORNO SEGURO A ORIGEM =====
+-- ===== RETORNO SEGURO =====
 
 local function voltarParaOrigem()
     print("Retornando... posicao: X=" .. posX .. " Y=" .. posY .. " Z=" .. posZ)
@@ -242,17 +241,25 @@ local function descarregarNaOrigem()
     turtle.select(1)
 end
 
--- ===== ESCANEAMENTO =====
+-- ===== ESCANEAMENTO (com protecao de cooldown) =====
 
 local function chaveDe(x, y, z) return x .. "," .. y .. "," .. z end
-
-local function distanciaDaOrigem(x, y, z)
-    return math.abs(x) + math.abs(y) + math.abs(z)
-end
+local function distanciaDaOrigem(x, y, z) return math.abs(x) + math.abs(y) + math.abs(z) end
 
 local function escanear()
+    -- respeita o cooldown de 2s do servidor, senao o scan pode retornar nil
+    local agora = os.clock()
+    local decorrido = agora - ultimoScan
+    if ultimoScan > 0 and decorrido < COOLDOWN_SCAN then
+        sleep(COOLDOWN_SCAN - decorrido)
+    end
+    ultimoScan = os.clock()
+
     local ok, resultado = pcall(function() return geoScanner.scan(RAIO_SCAN) end)
-    if not ok or not resultado then return 0 end
+    if not ok or not resultado then
+        print("Aviso: scan falhou ou retornou vazio, tentando de novo em breve...")
+        return 0
+    end
 
     local novos = 0
     for _, bloco in ipairs(resultado) do
@@ -261,7 +268,6 @@ local function escanear()
                 local ax, ay, az = posX + bloco.x, posY + bloco.y, posZ + bloco.z
                 local chave = chaveDe(ax, ay, az)
 
-                -- ignora minerio longe demais da origem (evita viagem ineficiente)
                 if not visitados[chave] and distanciaDaOrigem(ax, ay, az) <= DISTANCIA_MAXIMA_ORIGEM then
                     local existe = false
                     for _, a in ipairs(listaAlvos) do
@@ -288,7 +294,6 @@ local function pegarMaisProximo()
     return table.remove(listaAlvos, idx)
 end
 
--- calcula quanto de fuel custaria voltar da posicao atual pra origem
 local function custoRetorno()
     return math.abs(posX) + math.abs(posY) + math.abs(posZ)
 end
@@ -317,7 +322,6 @@ print("Iniciando escaneamento e mineracao...")
 local semAchar = 0
 
 while semAchar < 3 do
-    -- seguranca: se o fuel mal da pra voltar, aborta AGORA
     if turtle.getFuelLevel() < custoRetorno() + FUEL_RESERVA_RETORNO then
         print("Fuel insuficiente para continuar com seguranca. Voltando...")
         break
@@ -329,7 +333,6 @@ while semAchar < 3 do
         if novos == 0 then
             semAchar = semAchar + 1
             print("Nada encontrado. (" .. semAchar .. "/3)")
-            sleep(1)
         else
             print(novos .. " minerio(s) encontrado(s)! Total na fila: " .. #listaAlvos)
             semAchar = 0
