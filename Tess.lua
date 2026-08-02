@@ -1,7 +1,7 @@
 -- ===== CONFIGURACOES =====
 local NOME_IA = "Tess"
 local TEMPO_PULSO = 1 -- segundos que o redstone fica ligado
-local LADO_INTEGRATOR = "front" -- lado do Integrator conectado a Interface (ajustar conforme montagem)
+local LADO_INTEGRATOR = "back" -- ajustar depois de conectar (ver instrucoes abaixo)
 
 -- ===== PERIFERICOS =====
 local chatBox = peripheral.find("chatBox")
@@ -13,7 +13,7 @@ if not chatBox then
 end
 
 if not integrator then
-    print("ERRO: Redstone Integrator nao encontrado conectado a este computador.")
+    print("ERRO: Redstone Integrator nao encontrado. Verifique se os Wired Modems estao ativados (clique neles) e conectados pelo cabo.")
     return
 end
 
